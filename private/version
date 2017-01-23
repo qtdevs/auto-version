@@ -1,0 +1,143 @@
+#!/usr/bin/python
+#-*- coding:utf-8 -*-
+
+import errno
+import os
+import platform
+import re
+import subprocess
+import sys
+
+def getLastInfo():
+    try:
+        # 获取 Git 版本信息
+        args = ['git', '--version']
+        pattern = re.compile(r'\D+(\d+)[.](\d+)[.](\d+)')
+        data = subprocess.check_output(args, stderr=subprocess.STDOUT).strip()
+        match = pattern.match(data)
+        if match:
+            majorVersion = int(match.group(1))
+            minorVersion = int(match.group(2))
+            # 只有 2.2.x 版本以上的 Git 才有 %aI 和 %cI
+            if (majorVersion >= 2 and minorVersion >= 2):
+                args = ['git', 'log', '--pretty=format:%H%aI%cI', '-1']
+                return subprocess.check_output(args, stderr=subprocess.STDOUT).strip()
+            else:
+                args = ['git', 'log', '--pretty=format:%H%ai%ci', '-1']
+                data = subprocess.check_output(args, stderr=subprocess.STDOUT).strip()
+                return data[:50] + 'T' + data[51:59] + data[60:63] + ':' + data[63:75] + 'T' + data[76:84] + data[85:88] + ':' + data[88:90]
+    # 异常处理
+    except subprocess.CalledProcessError as e:
+        print('Error: ' + e.output)
+    except OSError as e:
+        if errno.ENOENT == e.errno:
+            print('Command not found: ' + args[0])
+        else:
+            print(e)
+    # 前面的代码执行有问题, 直接退出
+    sys.exit(1)
+
+def localtime():
+    try:
+        if platform.system() == 'Windows':
+            args = ['WMIC', 'OS', 'GET', 'LocalDateTime']
+            date = subprocess.check_output(args, stderr=subprocess.STDOUT).strip()
+            pattern = re.compile(r'\D+(\d+)[.]\d+([+])(\d+)')
+            match = pattern.match(date)
+            if match:
+                dt = match.group(1)
+                tz = match.group(2)
+                tzs = int(match.group(3))
+                tzh = '{:02d}'.format(tzs / 60)
+                tzm = '{:02d}'.format(tzs % 60)
+                return dt[:4] + '-' + dt[4:6] + '-' + dt[6:8] + 'T' \
+                    + dt[8:10] + ':' + dt[10:12] + ':' + dt[12:14] + tz + tzh + ':' + tzm
+        else:
+            args = ['date', '+%G-%m-%dT%H:%M:%S%z']
+            date = subprocess.check_output(args, stderr=subprocess.STDOUT)
+            if ':' != date[23]:
+                date = date[:22] + r':' + date[22:]
+            return date.strip()
+    # 异常处理
+    except subprocess.CalledProcessError as e:
+        print('Error: ' + e.output)
+    except OSError as e:
+        if errno.ENOENT == e.errno:
+            print('Command not found: ' + args[0])
+        else:
+            print(e)
+    # 前面的代码执行有问题, 直接退出
+    sys.exit(2)
+
+if __name__ == '__main__':
+    # 分析输出目录和工作目录
+    scriptTarget = os.path.abspath(sys.argv[0]);
+    target = os.path.dirname(os.path.dirname(scriptTarget))
+    os.chdir(os.path.dirname(target))
+
+    try:
+        info = getLastInfo()
+        commitId =   info[:40]
+        amendDate =  info[40:65]
+        commitDate = info[65:]
+        buildDate =  localtime()
+        # 生成版本文件
+        with open(target + '/version.h', 'w') as f:
+            f.write('#ifndef VERSION_H_88058EC9_4424_4C2A_B52E_17A891AFDEA2\n')
+            f.write('#define VERSION_H_88058EC9_4424_4C2A_B52E_17A891AFDEA2\n')
+            f.write('\n')
+            f.write('#define QT_GIT_COMMIT_ID   \"' + commitId + '\"\n')
+            f.write('#define QT_GIT_AMEND_DATE  \"' + amendDate + '\"\n')
+            f.write('#define QT_GIT_COMMIT_DATE \"' + commitDate + '\"\n')
+            f.write('#define QT_GIT_BUILD_DATE  \"' + buildDate + '\"\n')
+            f.write('\n')
+            f.write('#endif//VERSION_H_88058EC9_4424_4C2A_B52E_17A891AFDEA2\n')
+        # 生成定义文件
+        with open(target + '/verdefs.pri', 'w') as f:
+            f.write('\n')
+            f.write('QT_GIT_COMMIT_ID   = \"' + commitId + '\"\n')
+            f.write('QT_GIT_AMEND_DATE  = \"' + amendDate + '\"\n')
+            f.write('QT_GIT_COMMIT_DATE = \"' + commitDate + '\"\n')
+            f.write('QT_GIT_BUILD_DATE  = \"' + buildDate + '\"\n')
+            f.write('\n')
+            f.write('message("QT_GIT_COMMIT_ID = "\\\"$$QT_GIT_COMMIT_ID\\\")\n')
+            f.write('message("QT_GIT_AMEND_DATE = "\\\"$$QT_GIT_AMEND_DATE\\\")\n')
+            f.write('message("QT_GIT_COMMIT_DATE = "\\\"$$QT_GIT_COMMIT_DATE\\\")\n')
+            f.write('message("QT_GIT_BUILD_DATE = "\\\"$$QT_GIT_BUILD_DATE\\\")\n')
+
+    except SystemExit as e:
+        # 生成空的版本文件, 包含错误提示
+        with open(target + '/version.h', 'w') as f:
+            f.write('#ifndef VERSION_H_88058EC9_4424_4C2A_B52E_17A891AFDEA2\n')
+            f.write('#define VERSION_H_88058EC9_4424_4C2A_B52E_17A891AFDEA2\n')
+            f.write('\n')
+            r = str(e.args[0])
+            if '1' == r:
+                f.write('#error "Command not found: \'git\'"\n')
+            elif '2' == r:
+                f.write('#error "Command not found: \'date\'"\n')
+            else:
+                f.write('#error "Unknown value: \'' + r + '"\n')
+            f.write('\n')
+            f.write('#define QT_GIT_COMMIT_ID   \"\"\n')
+            f.write('#define QT_GIT_AMEND_DATE  \"\"\n')
+            f.write('#define QT_GIT_COMMIT_DATE \"\"\n')
+            f.write('#define QT_GIT_BUILD_DATE  \"\"\n')
+            f.write('\n')
+            f.write('#endif//VERSION_H_88058EC9_4424_4C2A_B52E_17A891AFDEA2\n')
+        # 生成定义文件
+        with open(target + '/verdefs.pri', 'w') as f:
+            f.write('\n')
+            if '1' == r:
+                f.write('error("Command not found: \'git\'")\n')
+            elif '2' == r:
+                f.write('error("Command not found: \'date\'")\n')
+            else:
+                f.write('error("Unknown value: \'' + r + '")\n')
+            f.write('QT_GIT_COMMIT_ID   = \"\"\n')
+            f.write('QT_GIT_AMEND_DATE  = \"\"\n')
+            f.write('QT_GIT_COMMIT_DATE = \"\"\n')
+            f.write('QT_GIT_BUILD_DATE  = \"\"\n')
+        # 将 sys.exit() 的返回码作为返回码
+        exit(e.args[0])
+
